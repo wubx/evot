@@ -268,11 +268,25 @@ async fn execute_single_tool(
 
     let (result, is_error) = match tool {
         Some(tool) => {
-            // Schema pre-validation + type coercion (à la Claude Code / Forge Code).
+            // Step 1: Try parameter auto-completion for missing required parameters
+            let completion_context =
+                crate::tools::parameter_completion::ParameterCompletionContext::new(
+                    cwd.to_path_buf(),
+                );
+            let completed_args = match crate::tools::parameter_completion::auto_complete_parameters(
+                name,
+                args.clone(),
+                &completion_context,
+            ) {
+                Ok(completed) => completed,
+                Err(_) => args.clone(), // Fall back to original args if completion fails
+            };
+
+            // Step 2: Schema pre-validation + type coercion (à la Claude Code / Forge Code).
             let validated_args = crate::tools::validation::validate_and_coerce(
                 name,
                 &tool.parameters_schema(),
-                args,
+                &completed_args,
             );
             match validated_args {
                 Err(validation_error) => (

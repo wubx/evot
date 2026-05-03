@@ -318,3 +318,85 @@ async fn test_web_fetch_headers_skip_browser_fallback() {
 
     assert_eq!(result.details["renderer"], "reqwest");
 }
+
+// --- Binary content type tests (issue #30) ---
+
+#[tokio::test]
+async fn test_web_fetch_pdf_returns_binary_error() {
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/doc.pdf"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_bytes(b"%PDF-1.4 binary\x80\x81\x82content")
+                .insert_header("content-type", "application/pdf"),
+        )
+        .mount(&server)
+        .await;
+
+    let tool = evotengine::tools::web_fetch::WebFetchTool::new();
+    let url = format!("{}/doc.pdf", server.uri());
+    let result = tool
+        .execute(serde_json::json!({"url": url}), ctx("web_fetch"))
+        .await
+        .unwrap();
+
+    let text = match &result.content[0] {
+        Content::Text { text } => text,
+        _ => panic!("expected text"),
+    };
+    assert!(text.contains("application/pdf"));
+    assert!(result.details["binary"].as_bool().unwrap_or(false));
+}
+
+#[tokio::test]
+async fn test_web_fetch_image_returns_binary_error() {
+    use wiremock::matchers::method;
+    use wiremock::matchers::path;
+    use wiremock::Mock;
+    use wiremock::MockServer;
+    use wiremock::ResponseTemplate;
+
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/photo.png"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_bytes(b"\x89PNG\r\n\x1a\n")
+                .insert_header("content-type", "image/png"),
+        )
+        .mount(&server)
+        .await;
+
+    let tool = evotengine::tools::web_fetch::WebFetchTool::new();
+    let url = format!("{}/photo.png", server.uri());
+    let result = tool
+        .execute(serde_json::json!({"url": url}), ctx("web_fetch"))
+        .await
+        .unwrap();
+
+    let text = match &result.content[0] {
+        Content::Text { text } => text,
+        _ => panic!("expected text"),
+    };
+    assert!(text.contains("image/png"));
+    assert!(result.details["binary"].as_bool().unwrap_or(false));
+}
+
+#[test]
+fn test_truncate_text_char_boundary_safe() {
+    use evotengine::tools::web_fetch::truncate_text_for_test;
+
+    // "€" is 3 bytes (0xE2 0x82 0xAC). 6 of them = 18 bytes.
+    // Use a limit of 16 so it lands mid-character.
+    let input = "€".repeat(6); // 18 bytes
+    let result = truncate_text_for_test(input, 16);
+    // Must not panic and must be valid UTF-8
+    assert!(result.contains("truncated"));
+}

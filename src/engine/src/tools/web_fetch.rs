@@ -142,6 +142,19 @@ impl AgentTool for WebFetchTool {
             });
         }
 
+        if is_binary_content_type(&content_type) {
+            return Ok(ToolResult {
+                content: vec![Content::Text {
+                    text: format!(
+                        "Cannot display binary content (content-type: {content_type}). \
+                         Only text-based URLs are supported."
+                    ),
+                }],
+                details: serde_json::json!({ "status": status, "binary": true }),
+                retention: Retention::Normal,
+            });
+        }
+
         let body = response
             .text()
             .await
@@ -254,11 +267,54 @@ fn html_to_text(html: &str) -> String {
     }
 }
 
-/// Truncate large text responses to the tool limit.
-fn truncate_text(mut text: String) -> String {
-    if text.len() > MAX_RESPONSE_SIZE {
-        text.truncate(MAX_RESPONSE_SIZE);
+/// Returns true for content types that are binary and cannot be meaningfully
+/// displayed as text (e.g. PDF, images, audio, video, archives).
+fn is_binary_content_type(content_type: &str) -> bool {
+    let ct = content_type.split(';').next().unwrap_or("").trim();
+    matches!(
+        ct,
+        "application/pdf"
+            | "application/octet-stream"
+            | "application/zip"
+            | "application/x-zip-compressed"
+            | "application/gzip"
+            | "application/x-tar"
+            | "application/x-rar-compressed"
+            | "application/x-7z-compressed"
+            | "application/wasm"
+            | "application/vnd.ms-excel"
+            | "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            | "application/vnd.ms-powerpoint"
+            | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            | "application/msword"
+            | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ) || ct.starts_with("image/")
+        || ct.starts_with("audio/")
+        || ct.starts_with("video/")
+}
+
+/// Truncate large text responses to the tool limit, always on a valid UTF-8 boundary.
+fn truncate_text(text: String) -> String {
+    truncate_at(text, MAX_RESPONSE_SIZE)
+}
+
+/// Truncate `text` at `limit` bytes, walking back to a valid UTF-8 char boundary.
+/// Exposed for testing via `truncate_text_for_test`.
+fn truncate_at(mut text: String, limit: usize) -> String {
+    if text.len() > limit {
+        // Walk back from `limit` to find a valid char boundary so we never
+        // panic on multi-byte characters (e.g. after decoding binary content).
+        let mut boundary = limit;
+        while boundary > 0 && !text.is_char_boundary(boundary) {
+            boundary -= 1;
+        }
+        text.truncate(boundary);
         text.push_str("\n... (response truncated at 512KB)");
     }
     text
+}
+
+/// Test-only wrapper that exposes `truncate_at` with a custom limit.
+pub fn truncate_text_for_test(text: String, limit: usize) -> String {
+    truncate_at(text, limit)
 }

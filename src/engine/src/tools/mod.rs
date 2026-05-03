@@ -5,6 +5,7 @@ pub mod file;
 pub mod guard;
 pub mod list;
 pub mod memory;
+pub mod parameter_completion;
 pub mod sandbox;
 pub mod search;
 pub mod skill;
